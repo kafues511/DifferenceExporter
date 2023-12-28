@@ -28,8 +28,7 @@ def file_copy_worker(input_queue:queue.Queue, input_dir:Path,output_dir:Path, ta
     input_dir_parts_length = len(input_dir_parts)
 
     while True:
-        path:Optional[Path] = input_queue.get()
-        if path:=input_queue.get() is not None:
+        if isinstance(path:=input_queue.get(), Path):
             # 対象の拡張子 && ファイル名に1つの拡張子(.gen.xxxを省きたい) && 編集したファイル
             if pattern.search(str(path)) and len(path.suffixes) == 1 and is_edited_file(path, tag):
                 input_path = path
