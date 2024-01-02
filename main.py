@@ -10,11 +10,14 @@ from typing import Optional
 import argparse
 
 
-def is_edited_file(path:Path, tag:str) -> bool:
+def is_edited_file(path:Path, tag:str, encoding:Optional[str] = None) -> bool:
     try:
-        with open(str(path), mode="r") as f:
+        with open(str(path), mode="r", encoding=encoding) as f:
             if f.read().find(tag) != -1:
                 return True
+    except UnicodeDecodeError as e:
+        if encoding is None:
+            return is_edited_file(path, tag, "utf-8")
     except Exception as e:
         pass
     return False
@@ -28,7 +31,7 @@ def file_copy_worker(input_queue:queue.Queue, input_dir:Path,output_dir:Path, ta
     input_dir_parts_length = len(input_dir_parts)
 
     while True:
-        if isinstance(path:=input_queue.get(), Path):
+        if isinstance((path:=input_queue.get()), Path):
             # 対象の拡張子 && ファイル名に1つの拡張子(.gen.xxxを省きたい) && 編集したファイル
             if pattern.search(str(path)) and len(path.suffixes) == 1 and is_edited_file(path, tag):
                 input_path = path
