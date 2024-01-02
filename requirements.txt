@@ -1,0 +1,2 @@
+ttkbootstrap==1.10.1
+cx-Freeze==6.15.12

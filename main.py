@@ -1,149 +1,120 @@
-import re
+import tkinter as tk
+import ttkbootstrap as ttk
+from ttkbootstrap.constants import *
+
 from pathlib import Path
-import time
 import os
-import sys
-import shutil
-import threading as th
-import queue
-from typing import Optional, Callable
-import argparse
-from dataclasses import dataclass
+from typing import Optional
+
+from editor import *
+from runtime import *
+#from icondata import ICONDATA
 
 
-@dataclass
-class DiffExportInfo:
-    """差分出力情報
-    """
-    input_dir:Path
-    output_dir:Path
-    tag:str
-    num_workers:int
-
-    def __post_init__(self) -> None:
-        if isinstance(self.input_dir, str):
-            self.input_dir = Path(self.input_dir)
-
-        if isinstance(self.output_dir, str):
-            self.output_dir = Path(self.output_dir)
-
-        self.num_workers = min(max(1, self.num_workers), os.cpu_count())
-
-
-class DifferenceExporter:
-    WAIT_TIME = 1 / 30
-
-    """差分ファイルの出力
-    """
+class DifferenceExporterApplication(ttk.Window):
     def __init__(self) -> None:
-        """コンストラクタ
-        """
-        # GIF変換と出力を行うスレッド
-        self.thread:th.Thread = None
+        super().__init__("Difference Exporter", iconphoto=None)
 
-    def is_thread_ready(self) -> bool:
-        """スレッドの立ち上げ準備が整っているかを取得します。
+        #self.iconphoto(True, tk.PhotoImage(data=ICONDATA))
+
+        self.diff_exporter = DifferenceExporter()
+
+        self.tk_input_directory = DirectoryButton(self, text="Input directory", tooltip="コピー元のディレクトリを指定します。", column=(0, 1), row=0, padx=((10, 10), (0, 10)), pady=((10, 0), (10, 0)), callback_update_directory=self.update_input_directory)
+        self.tk_output_directory = DirectoryButton(self, text="Output directory", tooltip="コピー先のディレクトリを指定します。", column=(0, 1), row=1, padx=((10, 10), (0, 10)), pady=10, callback_update_directory=self.update_output_directory)
+        self.tk_search_content_entry = SearchContentEntry(self, column=(0, 1), row=2, padx=((10, 10), (0, 10)), pady=0, callback_update_content=self.update_search_content)
+        self.tk_export_progress = ExportProgress(self, column=(0, 1), row=3, padx=((10, 10), (0, 0)), pady=10)
+        self.tk_export_button = ExportButton(self, column=1, row=4, padx=((0, 10), ), pady=((0, 10), ), callback_export=self.start_diff_export)
+
+        # 最小サイズが決定したのでウィンドウサイズを固定
+        self.resizable(width=False, height=False)
+
+    @property
+    def input_dir(self) -> str:
+        """入力・コピー元ディレクトリを取得
 
         Returns:
-            bool: スレッドを立ち上げられる場合はTrueを返します。
+            str: 入力・コピー元ディレクトリ
         """
-        # スレッドが生きている場合は準備完了していません。
-        return True if self.thread is None else not self.thread.is_alive()
+        return self.tk_input_directory.directory
 
-    def export(
+    @property
+    def output_dir(self) -> str:
+        """出力・コピー先ディレクトリを取得
+
+        Returns:
+            str: 出力・コピー先ディレクトリ
+        """
+        return self.tk_output_directory.directory
+
+    @property
+    def search_content(self) -> str:
+        """検索内容を取得
+
+        Returns:
+            str: 検索内容
+        """
+        return self.tk_search_content_entry.content
+
+    def update_input_directory(self, directory:str) -> None:
+        """入力ディレクトリの更新
+
+        Args:
+            directory (str): 入力ディレクトリ
+        """
+        self.update_export_button_state(input_directory=directory)
+
+    def update_output_directory(self, directory:str) -> None:
+        """出力ディレクトリの更新
+
+        Args:
+            directory (str): 出力ディレクトリ
+        """
+        self.update_export_button_state(output_directory=directory)
+
+    def update_search_content(self, content:str) -> None:
+        """検索内容の更新
+
+        Args:
+            content (str): 検索内容
+        """
+        self.update_export_button_state(search_content=content)
+
+    def update_export_button_state(
         self,
-        input_dir:str,
-        output_dir:str,
-        tag:str,
-        num_workers:int,
-        callback_progress:Optional[Callable[[int, int], None]] = None,
-        callback_exported:Optional[Callable[[bool, str], None]] = None,
-    ) -> bool:
-        # 前回実行した差分出力が完了していない
-        if not self.is_thread_ready():
-            return False
-
-        # コピー元の有効性を判定
-        if not DifferenceExporter.is_valid_directory(input_dir):
-            return False
-
-        # コピー先の有効性を判定
-        if not DifferenceExporter.is_valid_directory(output_dir):
-            return False
-
-        # srcとdstが同じディレクトリの場合は破壊するのでダメ
-        if Path(input_dir).absolute() == Path(output_dir).absolute():
-            return False
-
-        # スレッド立ち上げ
-        self.thread = th.Thread(
-            target=self.thread_export,
-            args=(
-                DiffExportInfo(
-                    input_dir,
-                    output_dir,
-                    tag,
-                    num_workers,
-                ),
-                callback_progress,
-                callback_exported,
-            ),
-            daemon=True,
-        )
-        self.thread.start()
-
-        return True
-
-    def thread_export(
-        self,
-        info:DiffExportInfo,
-        callback_progress:Optional[Callable[[int, int], None]] = None,
-        callback_exported:Optional[Callable[[bool, str], None]] = None,
+        input_directory:Optional[str] = None,
+        output_directory:Optional[str] = None,
+        search_content:Optional[str] = None,
     ) -> None:
-        input_queue = queue.Queue()
+        """出力ボタンの状態の更新
 
-        threads:list[th.Thread] = []
-        for _ in range(info.num_workers):
-            thread = th.Thread(
-                target=DifferenceExporter.file_copy_worker,
-                args=(
-                    input_queue,
-                    info.input_dir,
-                    info.output_dir,
-                    info.tag,
-                ),
-                daemon=True,
-            )
-            thread.start()
-            threads.append(thread)
+        Args:
+            input_directory (Optional[str], optional): 入力ディレクトリ. Defaults to None.
+            output_directory (Optional[str], optional): 出力ディレクトリ. Defaults to None.
+            search_content (Optional[str], optional): 検索内容. Defaults to None.
+        """
+        if input_directory is None:
+            input_directory = self.input_dir
+        if output_directory is None:
+            output_directory = self.output_dir
+        if search_content is None:
+            search_content = self.search_content
 
-        total_file_num = 0
+        input_directory:Path = Path(input_directory)
+        output_directory:Path = Path(output_directory)
 
-        # 再帰的
-        for path in info.input_dir.glob("**/*"):
-            input_queue.put(path)
-            total_file_num += 1
+        # 同一ディレクトリは寝ぼけているだろう
+        if input_directory.absolute() == output_directory.absolute():
+            state = False
+        # 不正な検索内容
+        elif not self.is_valid_search_content(search_content):
+            state = False
+        else:
+            state = self.is_valid_directory(input_directory) and self.is_valid_directory(output_directory)
 
-        while True:
-            time.sleep(self.WAIT_TIME)
+        # ボタンの状態を入力、出力ディレクトリと検索内容の有効性に沿って更新
+        self.tk_export_button.state = NORMAL if state else DISABLED
 
-            total_file_left_num = input_queue.qsize()
-
-            if callback_progress is not None:
-                callback_progress(total_file_num, total_file_left_num)
-
-            if total_file_left_num == 0:  # whileの判定にqsize()を直に使うと偶に怪しい挙動を見せるため
-                break
-
-        # 雑に殺すためにNoneを大量投下
-        for _ in range(len(threads) * 10):
-            input_queue.put(None)
-
-        if callback_exported is not None:
-            callback_exported()
-
-    @staticmethod
-    def is_valid_directory(directory:str) -> bool:
+    def is_valid_directory(self, directory:str) -> bool:
         """有効なディレクトリか判定
 
         Args:
@@ -152,91 +123,56 @@ class DifferenceExporter:
         Returns:
             bool: 有効な場合はTrueを返します。
         """
-        if isinstance(directory, str) and directory != "":
-            directory:Path = Path(directory)
-        elif isinstance(directory, Path) and directory == Path(""):
-            return False
-        elif not isinstance(directory, Path):
-            return False
+        return DifferenceExporter.is_valid_directory(directory)
 
-        return directory.is_dir()
+    def is_valid_search_content(self, content:str) -> bool:
+        """検索内容の有効性を判定
 
-    @staticmethod
-    def is_edited_file(path:Path, tag:str, encoding:Optional[str] = None) -> bool:
-        try:
-            with open(str(path), mode="r", encoding=encoding) as f:
-                if f.read().find(tag) != -1:
-                    return True
-        except UnicodeDecodeError as e:
-            if encoding is None:
-                return DifferenceExporter.is_edited_file(path, tag, "utf-8")
-        except Exception as e:
-            pass
-        return False
+        Args:
+            content (str): 検索内容
 
-    @staticmethod
-    def file_copy_worker(input_queue:queue.Queue, input_dir:Path,output_dir:Path, tag:str) -> None:
-        pattern = re.compile("\.(h|cpp|ush|usf|ini|md|hlsl|glsl|cs)$")
+        Returns:
+            bool: 有効な場合はTrueを返します。
+        """
+        return True if isinstance(content, str) and content != "" else False
 
-        input_dir:Path = Path(input_dir)
-        input_dir_parts = input_dir.parts
-        input_dir_parts_length = len(input_dir_parts)
+    def start_diff_export(self) -> None:
+        """差分ファイルの出力を開始
+        """
+        if not self.is_valid_directory((input_dir:=self.input_dir)):
+            return
 
-        while True:
-            if isinstance((path:=input_queue.get()), Path):
-                # 対象の拡張子 && ファイル名に1つの拡張子(.gen.xxxを省きたい) && 編集したファイル
-                if pattern.search(str(path)) and len(path.suffixes) == 1 and DifferenceExporter.is_edited_file(path, tag):
-                    input_path = path
-                    output_path = output_dir / os.path.join(*path.parts[input_dir_parts_length-1:-1])
+        if not self.is_valid_directory((output_dir:=self.output_dir)):
+            return
 
-                    output_path.mkdir(parents=True, exist_ok=True)
+        if not self.is_valid_search_content((content:=self.search_content)):
+            return
 
-                    shutil.copy(str(input_path), str(output_path))
-            else:
-                break
+        ret = self.diff_exporter.export(
+            input_dir,
+            output_dir,
+            content,
+            os.cpu_count(),
+            self.end_diff_export,
+        )
 
+        if ret:
+            self.tk_export_progress.start()
+            self.tk_input_directory.state = DISABLED
+            self.tk_output_directory.state = DISABLED
+            self.tk_search_content_entry.state = DISABLED
+            self.tk_export_button.state = DISABLED
 
-lock = th.Lock()
-is_finish = False
-
-
-def show_progress(total_file_num:int, total_file_left_num:int) -> None:
-    print(f"{total_file_left_num}/{total_file_num}")
-
-
-def show_complete() -> None:
-    global is_finish
-    with lock:
-        is_finish = True
-
-
-def get_is_finish() -> bool:
-    global is_finish
-    if not lock.acquire(True, 0.0):
-        return False
-    else:
-        is_ret = is_finish
-        lock.release()
-        return is_ret
-
-
-def my_app(input_dir:str, output_dir:str, tag:str, show_process_time:bool) -> None:
-    app = DifferenceExporter()
-
-    if not app.export(input_dir, output_dir, tag, 2, show_progress, show_complete):
-        return
-
-    while not get_is_finish():
-        time.sleep(1 / 60)
+    def end_diff_export(self) -> None:
+        """差分ファイルの出力を終了
+        """
+        self.tk_export_progress.end()
+        self.tk_input_directory.state = READONLY
+        self.tk_output_directory.state = READONLY
+        self.tk_search_content_entry.state = NORMAL
+        self.tk_export_button.state = NORMAL
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input_dir", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, required=True)
-    parser.add_argument("--tag", type=str, required=True)
-    parser.add_argument("--show_process_time", default=False, action="store_true")
-
-    args = parser.parse_args(sys.argv[1:])
-
-    my_app(args.input_dir, args.output_dir, args.tag, args.show_process_time)
+    app = DifferenceExporterApplication()
+    app.mainloop()
