@@ -167,7 +167,7 @@ class DifferenceExporter:
 
     @staticmethod
     def file_copy_worker(input_queue:queue.Queue, input_dir:Path,output_dir:Path, tag:str) -> None:
-        pattern = re.compile("\.(h|cpp|ush|usf|ini|md|hlsl|glsl|cs)$")
+        pattern = re.compile("\.(h|cpp|ush|usf|ini|md|hlsl|glsl|cs|inl)$")
 
         input_dir:Path = Path(input_dir)
         input_dir_parts = input_dir.parts

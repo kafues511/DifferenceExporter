@@ -15,13 +15,13 @@ base = "Win32GUI" if sys.platform == "win32" else None
 exe = Executable(
     script="main.py",
     base=base,
-    target_name="DifferenceExporter",
     #icon="icon.ico",
+    target_name="Difference Exporter",
 )
 
 setup(
-    name="DifferenceExporter",
-    version="0.1.0",
+    name="Difference Exporter",
+    version="0.1.1",
     description="",
     options={
         "build_exe": build_exe_options,
